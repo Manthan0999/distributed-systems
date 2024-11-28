@@ -1,0 +1,158 @@
+syntax = "proto3";
+
+package banking;
+
+option go_package = "../banking";
+
+service BankingService {
+  // Intra-shard transaction
+  rpc IntraShardTransaction(TransactionRequest) returns (TransactionResponse);
+
+  // Cross-shard transaction
+  rpc CrossShardTransaction(TransactionRequest) returns (TransactionResponse);
+
+  // Replicate transaction to other servers in the cluster
+  rpc ReplicateTransaction(Transaction) returns (TransactionResponse);
+
+  rpc GetBalance(AccountRequest) returns (AccountResponse);
+
+  rpc UpdateLiveServers(LiveServersRequest) returns (LiveServersResponse);
+
+  rpc Abort(AbortRequest) returns (AbortResponse);
+
+  // Paxos Protocol Methods
+  rpc Prepare(PrepareRequest) returns (PrepareResponse);
+  rpc Accept(AcceptRequest) returns (AcceptResponse);
+  rpc Commit(CommitRequest) returns (CommitResponse);
+  rpc GetDatastore(GetDatastoreRequest) returns (GetDatastoreResponse);
+
+  rpc CrossShardPrepare(CrossShardPrepareRequest) returns (CrossShardPrepareResponse);
+  rpc CrossShardCommit(CrossShardCommitRequest) returns (CrossShardCommitResponse);
+  rpc CrossShardAbort(CrossShardAbortRequest) returns (CrossShardAbortResponse);
+}
+
+message LiveServersRequest {
+  repeated string live_servers = 1;
+  repeated string contact_servers = 2;
+}
+
+message LiveServersResponse {
+  string message = 1;
+}
+
+message AccountRequest {
+  int32 account_id = 1;
+}
+
+message AccountResponse {
+  int32 account_id = 1;
+  int32 balance = 2;
+  string message = 3;
+}
+
+message TransactionRequest {
+  string TxnId = 1;
+  int32 sender = 2;
+  int32 receiver = 3;
+  int32 amount = 4;
+}
+
+message Transaction {
+  string ID = 1;
+  int32 sender = 2;
+  int32 receiver = 3;
+  int32 amount = 4;
+  int32 index = 5;
+  string status =6;
+}
+message GetDatastoreRequest {
+  string server_id = 1; // Server ID requesting the datastore
+}
+
+message GetDatastoreResponse {
+  repeated string datastore = 1;
+  repeated string wal = 2;// List of committed transactions in string format
+  string message = 3;            // Additional information or error messages
+}
+message TransactionResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message PrepareRequest {
+  int32 ballot_number = 1;
+  int32 datastore_version = 2;
+  Transaction Txn = 3;
+}
+message DatastoreEntry {
+  string TxnID = 1;
+  string Phase = 2; // "P" for Prepare, "C" for Commit, "" for intra-shard transactions
+  Transaction Txn = 3;
+}
+
+message PrepareResponse {
+  bool promise = 1;
+  int32 datastore_version = 2;
+  repeated DatastoreEntry MissingTransactions = 3;
+  Transaction Txn = 4;
+}
+
+message AbortRequest {
+  int32 ballot_number = 1;
+  string TxnId = 2;
+}
+
+message AbortResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message AcceptRequest {
+  int32 ballot_number = 1;
+  Transaction txn = 2;
+  bool wait_for_locks = 3; // New field
+}
+
+message AcceptResponse {
+  bool accepted = 1;
+}
+
+message CommitRequest {
+  int32 ballot_number = 1;
+  Transaction txn = 2;
+  string Phase = 3;
+}
+
+message CommitResponse {
+  bool success = 1;
+}
+
+message CrossShardPrepareRequest {
+  int32 sender = 1;
+  int32 receiver = 2;
+  int32 amount = 3;
+  string txn_id = 4;
+}
+
+message CrossShardPrepareResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message CrossShardCommitRequest {
+  string txn_id = 1;
+}
+
+message CrossShardCommitResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message CrossShardAbortRequest {
+  string txn_id = 1;
+}
+
+message CrossShardAbortResponse {
+  bool success = 1;
+  string message = 2;
+}
