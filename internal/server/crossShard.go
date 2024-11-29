@@ -151,7 +151,7 @@ func (s *Server) CrossShardAbort(ctx context.Context, req *pb.CrossShardAbortReq
 	}
 
 	// Reverse the transaction
-	if getShard(txn.Sender) == s.shardID {
+	if getShard(txn.Sender, s.numClusters) == s.shardID {
 		_, err = dbTx.Exec("UPDATE accounts SET balance = balance + ? WHERE account_id = ?;", txn.Amount, txn.Sender)
 		if err != nil {
 			log.Printf("[CrossShardAbort] Failed to rollback sender account %d: %v", txn.Sender, err)
@@ -163,7 +163,7 @@ func (s *Server) CrossShardAbort(ctx context.Context, req *pb.CrossShardAbortReq
 		}
 	}
 
-	if getShard(txn.Receiver) == s.shardID {
+	if getShard(txn.Receiver, s.numClusters) == s.shardID {
 		_, err = dbTx.Exec("UPDATE accounts SET balance = balance - ? WHERE account_id = ?;", txn.Amount, txn.Receiver)
 		if err != nil {
 			log.Printf("[CrossShardAbort] Failed to rollback receiver account %d: %v", txn.Receiver, err)

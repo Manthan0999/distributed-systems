@@ -28,14 +28,19 @@ type PerformanceMetrics struct {
 func main() {
 	// Parse command-line argument for input file
 	inputFile := flag.String("input", "", "Path to the input CSV file containing transaction sets")
+	clusters := flag.Int("clusters", 0, "Number of clusters")
+	serversPerCluster := flag.Int("serversPerCluster", 0, "Number of servers per cluster")
 	flag.Parse()
 
 	if *inputFile == "" {
 		log.Fatalf("Input file is required. Usage: ./interactive -input=path/to/transactions.csv")
 	}
+	if *clusters == 0 || *serversPerCluster == 0 {
+		log.Fatalf("Clusters and ServersPerCluster are required. Usage: ./interactive -clusters=3 -serversPerCluster=3")
+	}
 
-	// Initialize the client
-	client := clientpkg.NewClient()
+	// Initialize the client with the required arguments
+	client := clientpkg.NewClient(*clusters, *serversPerCluster)
 	defer client.CloseDBConnections()
 
 	perfMetrics := &PerformanceMetrics{}

@@ -18,15 +18,14 @@ func (s *Server) logPrepareInWAL(txn *pb.Transaction) error {
 }
 
 // getShard determines the shard for an account ID
-func getShard(accountID int32) string {
-	if accountID >= 1 && accountID <= 1000 {
-		return "D1"
-	} else if accountID >= 1001 && accountID <= 2000 {
-		return "D2"
-	} else if accountID >= 2001 && accountID <= 3000 {
-		return "D3"
+func getShard(accountID int32, numClusters int) string {
+	totalAccounts := int32(3000)
+	accountsPerShard := totalAccounts / int32(numClusters)
+	shardNum := ((accountID - 1) / accountsPerShard) + 1
+	if shardNum > int32(numClusters) {
+		shardNum = int32(numClusters) // Handle edge cases
 	}
-	return ""
+	return fmt.Sprintf("D%d", shardNum)
 }
 
 // Cross-Shard Transaction Handlers

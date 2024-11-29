@@ -7,8 +7,10 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"os"
+	//"os"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,16 +36,18 @@ type Server struct {
 	mu sync.Mutex
 
 	// Server and cluster information
-	serverID        string
-	serverIDAsInt   int32
-	shardID         string
-	serverAddress   string
-	clusterServers  []string
-	liveServers     map[string]bool
-	isContactServer bool
-	acceptedBallots map[int32]int32 // Map from account ID to acceptedBallot
-	acceptedValues  map[int32]*pb.Transaction
-	txnIDGenerator  *TransactionIDGenerator
+	serverID          string
+	serverIDAsInt     int32
+	shardID           string
+	serverAddress     string
+	clusterServers    []string
+	liveServers       map[string]bool
+	isContactServer   bool
+	acceptedBallots   map[int32]int32 // Map from account ID to acceptedBallot
+	acceptedValues    map[int32]*pb.Transaction
+	txnIDGenerator    *TransactionIDGenerator
+	numClusters       int
+	serversPerCluster int
 
 	// Write-Ahead Log (WAL) for Cross-Shard Transactions
 	wal      map[string]*pb.Transaction // Change key to string for txn.ID
@@ -151,49 +155,48 @@ func (s *Server) appendToDatastore(txnID string, phase string, txn *pb.Transacti
 }
 
 // NewServer initializes a new server instance
-func NewServer(shardID string, serverID string, dbPath string, clusterServers []string) *Server {
-
-	if _, err := os.Stat(dbPath); err == nil {
-		err = os.Remove(dbPath)
-		if err != nil {
-			log.Fatalf("Failed to delete existing database file: %v", err)
-		}
-		log.Printf("Deleted existing database file: %s", dbPath)
+func NewServer(serverID string, numClusters int, serversPerCluster int) *Server {
+	// Determine the shard ID for the server
+	sIDNum, err := strconv.Atoi(strings.TrimPrefix(serverID, "S"))
+	if err != nil {
+		log.Fatalf("Invalid server ID: %s", serverID)
 	}
-	// Open the database
+
+	shardNum := ((sIDNum - 1) / serversPerCluster) + 1
+	shardID := fmt.Sprintf("D%d", shardNum)
+	serverAddress := fmt.Sprintf("localhost:%d", 50050+sIDNum)
+
+	dbPath := fmt.Sprintf("server_%s.db", serverID)
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	serverAddress, ok := serverAddressMap[serverID]
-	if !ok {
-		log.Fatalf("Unknown server ID %s", serverID)
-	}
+
 	s := &Server{
-		shardID:         shardID,
-		serverID:        serverID,
-		db:              db,
-		clusterServers:  clusterServers,
-		serverIDAsInt:   serverIDMap[serverID],
-		serverAddress:   serverAddress,
-		liveServers:     make(map[string]bool),
-		committedTxns:   make([]*DatastoreEntry, 0),
-		locks:           make(map[int32]*TryMutex),
-		wal:             make(map[string]*pb.Transaction),
-		acceptedBallots: make(map[int32]int32),
-		acceptedValues:  make(map[int32]*pb.Transaction),
-		txnIDGenerator:  NewTransactionIDGenerator(serverID),
+		shardID:           shardID,
+		serverID:          serverID,
+		serverIDAsInt:     int32(sIDNum),
+		serverAddress:     serverAddress,
+		liveServers:       make(map[string]bool),
+		committedTxns:     make([]*DatastoreEntry, 0),
+		locks:             make(map[int32]*TryMutex),
+		wal:               make(map[string]*pb.Transaction),
+		acceptedBallots:   make(map[int32]int32),
+		acceptedValues:    make(map[int32]*pb.Transaction),
+		txnIDGenerator:    NewTransactionIDGenerator(serverID),
+		numClusters:       numClusters,
+		serversPerCluster: serversPerCluster,
+		db:                db,
 	}
 
-	// Create necessary tables
+	// Initialize accounts and load committed transactions
 	s.createTables()
-
-	// Initialize accounts if necessary
 	s.initializeAccounts()
 	s.loadCommittedTransactions()
 
 	return s
 }
+
 func (s *Server) GetDatastore(ctx context.Context, req *pb.GetDatastoreRequest) (*pb.GetDatastoreResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -248,6 +251,10 @@ func (s *Server) UpdateLiveServers(ctx context.Context, req *pb.LiveServersReque
 
 	log.Printf("Server %s updated live servers: %v, isContactServer: %v", s.serverID, s.liveServers, s.isContactServer)
 	return &pb.LiveServersResponse{Message: "Live servers updated"}, nil
+}
+
+func (s *Server) ServerAddress() string {
+	return s.serverAddress
 }
 
 // createTables creates the necessary tables in the database
@@ -342,18 +349,19 @@ func (s *Server) GetBalance(ctx context.Context, req *pb.AccountRequest) (*pb.Ac
 }
 
 // getShardRange returns the account ID range for the shard
-func (s *Server) getShardRange() (startID, endID int) {
-	switch s.shardID {
-	case "D1":
-		return 1, 1000
-	case "D2":
-		return 1001, 2000
-	case "D3":
-		return 2001, 3000
-	default:
+func (s *Server) getShardRange() (startID, endID int32) {
+	totalAccounts := int32(3000)
+	accountsPerShard := totalAccounts / int32(s.numClusters)
+	shardNum, err := strconv.Atoi(strings.TrimPrefix(s.shardID, "D"))
+	if err != nil {
 		log.Fatalf("Invalid shard ID: %s", s.shardID)
-		return 0, 0
 	}
+	startID = accountsPerShard*(int32(shardNum)-1) + 1
+	endID = accountsPerShard * int32(shardNum)
+	if int32(shardNum) == int32(s.numClusters) {
+		endID = totalAccounts // Ensure the last shard covers any remaining accounts
+	}
+	return startID, endID
 }
 
 // IntraShardTransaction handles intra-shard transactions using the modified Paxos protocol
@@ -381,7 +389,7 @@ func (s *Server) IntraShardTransaction(ctx context.Context, req *pb.TransactionR
 	log.Printf("[IntraShardTransaction] Server %s received transaction: (%d, %d, %d)", s.serverID, txn.Sender, txn.Receiver, txn.Amount)
 
 	// Validate that the transaction is intra-shard
-	if getShard(txn.Sender) != s.shardID || getShard(txn.Receiver) != s.shardID {
+	if getShard(txn.Sender, s.numClusters) != s.shardID || getShard(txn.Sender, s.numClusters) != s.shardID {
 		msg := "Transaction is not intra-shard"
 		return &pb.TransactionResponse{
 			Success: false,
@@ -676,10 +684,10 @@ func (s *Server) Accept(ctx context.Context, req *pb.AcceptRequest) (*pb.AcceptR
 	log.Printf("[Accept] Server %s received Accept request with ballot %d", s.serverID, ballot)
 
 	accounts := []int32{}
-	if getShard(txn.Sender) == s.shardID {
+	if getShard(txn.Sender, s.numClusters) == s.shardID {
 		accounts = append(accounts, txn.Sender)
 	}
-	if getShard(txn.Receiver) == s.shardID {
+	if getShard(txn.Receiver, s.numClusters) == s.shardID {
 		accounts = append(accounts, txn.Receiver)
 	}
 
@@ -707,7 +715,7 @@ func (s *Server) Accept(ctx context.Context, req *pb.AcceptRequest) (*pb.AcceptR
 	}
 
 	// **Add the sufficient funds check here**
-	if getShard(txn.Sender) == s.shardID {
+	if getShard(txn.Sender, s.numClusters) == s.shardID {
 		if !s.checkSufficientFunds(txn) {
 			log.Printf("[Accept] Transaction aborted due to insufficient funds")
 			return &pb.AcceptResponse{
@@ -829,10 +837,10 @@ func (s *Server) commitFn(txn *pb.Transaction, ballot int32) error {
 
 	// Clear acceptedBallots and acceptedValues for involved accounts
 	accounts := []int32{}
-	if getShard(txn.Sender) == s.shardID {
+	if getShard(txn.Sender, s.numClusters) == s.shardID {
 		accounts = append(accounts, txn.Sender)
 	}
-	if getShard(txn.Receiver) == s.shardID {
+	if getShard(txn.Receiver, s.numClusters) == s.shardID {
 		accounts = append(accounts, txn.Receiver)
 	}
 	for _, accountID := range accounts {
@@ -876,7 +884,7 @@ func (s *Server) Abort(ctx context.Context, req *pb.AbortRequest) (*pb.AbortResp
 	}
 
 	// Reverse the transaction
-	if getShard(txn.Sender) == s.shardID {
+	if getShard(txn.Sender, s.numClusters) == s.shardID {
 		_, err = dbTx.Exec("UPDATE accounts SET balance = balance + ? WHERE account_id = ?;", txn.Amount, txn.Sender)
 		if err != nil {
 			log.Printf("[Abort] Failed to rollback sender account %d: %v", txn.Sender, err)
@@ -888,7 +896,7 @@ func (s *Server) Abort(ctx context.Context, req *pb.AbortRequest) (*pb.AbortResp
 		}
 	}
 
-	if getShard(txn.Receiver) == s.shardID {
+	if getShard(txn.Receiver, s.numClusters) == s.shardID {
 		_, err = dbTx.Exec("UPDATE accounts SET balance = balance - ? WHERE account_id = ?;", txn.Amount, txn.Receiver)
 		if err != nil {
 			log.Printf("[Abort] Failed to rollback receiver account %d: %v", txn.Receiver, err)
@@ -957,10 +965,10 @@ func tryLock(m *sync.Mutex) bool {
 
 func (s *Server) acquireLocks(txn *pb.Transaction, waitForLocks bool) bool {
 	accounts := []int32{}
-	if getShard(txn.Sender) == s.shardID {
+	if getShard(txn.Sender, s.numClusters) == s.shardID {
 		accounts = append(accounts, txn.Sender)
 	}
-	if getShard(txn.Receiver) == s.shardID {
+	if getShard(txn.Receiver, s.numClusters) == s.shardID {
 		accounts = append(accounts, txn.Receiver)
 	}
 
@@ -1014,10 +1022,10 @@ func (s *Server) releaseLocks(txn *pb.Transaction, ballot int32) {
 	log.Printf("[Locks] Server %s releasing locks for txn %s ", s.serverID, txn.ID)
 
 	accounts := []int32{}
-	if getShard(txn.Sender) == s.shardID {
+	if getShard(txn.Sender, s.numClusters) == s.shardID {
 		accounts = append(accounts, txn.Sender)
 	}
-	if getShard(txn.Receiver) == s.shardID {
+	if getShard(txn.Receiver, s.numClusters) == s.shardID {
 		accounts = append(accounts, txn.Receiver)
 	}
 
@@ -1046,7 +1054,7 @@ func (s *Server) relaseLocks(txn *pb.Transaction, ballot int32, accounts []int32
 
 func (s *Server) checkSufficientFunds(txn *pb.Transaction) bool {
 	// Only check if this server is responsible for the sender's account
-	if getShard(txn.Sender) != s.shardID {
+	if getShard(txn.Sender, s.numClusters) != s.shardID {
 		// Not responsible for sender's account, assume sufficient
 		return true
 	}
@@ -1096,7 +1104,7 @@ func (s *Server) applyTransaction(txn *pb.Transaction) error {
 	}
 
 	// Update balances only for accounts in this shard
-	if getShard(txn.Sender) == s.shardID {
+	if getShard(txn.Sender, s.numClusters) == s.shardID {
 		_, err = tx.Exec("UPDATE accounts SET balance = balance - ? WHERE account_id = ?;", txn.Amount, txn.Sender)
 		if err != nil {
 			log.Printf("Error updating sender balance: %v", err)
@@ -1104,7 +1112,7 @@ func (s *Server) applyTransaction(txn *pb.Transaction) error {
 		}
 	}
 
-	if getShard(txn.Receiver) == s.shardID {
+	if getShard(txn.Receiver, s.numClusters) == s.shardID {
 		_, err = tx.Exec("UPDATE accounts SET balance = balance + ? WHERE account_id = ?;", txn.Amount, txn.Receiver)
 		if err != nil {
 			log.Printf("Error updating receiver balance: %v", err)
@@ -1146,10 +1154,14 @@ func (s *Server) getClusterServerAddresses() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var addresses []string
-	for serverID, isLive := range s.liveServers {
-		if isLive && s.isServerInShard(serverID) {
-			address, ok := serverAddressMap[serverID]
-			if ok && address != s.serverAddress {
+	basePort := 50050
+
+	totalServers := s.numClusters * s.serversPerCluster
+	for i := 1; i <= totalServers; i++ {
+		serverID := fmt.Sprintf("S%d", i)
+		if s.isServerInShard(serverID) && s.liveServers[serverID] {
+			address := fmt.Sprintf("localhost:%d", basePort+i)
+			if address != s.serverAddress {
 				addresses = append(addresses, address)
 			}
 		}
@@ -1158,12 +1170,14 @@ func (s *Server) getClusterServerAddresses() []string {
 }
 
 func (s *Server) isServerInShard(serverID string) bool {
-	serverShardMap := map[string]string{
-		"S1": "D1", "S2": "D1", "S3": "D1",
-		"S4": "D2", "S5": "D2", "S6": "D2",
-		"S7": "D3", "S8": "D3", "S9": "D3",
+	sIDNum, err := strconv.Atoi(strings.TrimPrefix(serverID, "S"))
+	if err != nil {
+		log.Printf("Invalid server ID: %s", serverID)
+		return false
 	}
-	return serverShardMap[serverID] == s.shardID
+	shardNum := ((sIDNum - 1) / s.serversPerCluster) + 1
+	shardID := fmt.Sprintf("D%d", shardNum)
+	return shardID == s.shardID
 }
 
 func (s *Server) getTotalShardServers() int {

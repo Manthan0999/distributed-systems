@@ -14,7 +14,7 @@ import (
 // handleCrossShardTransaction handles a cross-shard transaction
 func (c *Client) handleCrossShardTransaction(senderServerID, receiverServerID string, Counter int, txn *utils.Transaction) {
 	log.Printf("[Client] Initiating cross-shard transaction (%d, %d, %d) between %s and %s using servers: %s and %s",
-		txn.Sender, txn.Receiver, txn.Amount, getShard(txn.Sender), getShard(txn.Receiver), senderServerID, receiverServerID)
+		txn.Sender, txn.Receiver, txn.Amount, getShard(txn.Sender, c.numClusters), getShard(txn.Sender, c.numClusters), senderServerID, receiverServerID)
 
 	txnID := int32(Counter) // Generate a unique transaction ID
 

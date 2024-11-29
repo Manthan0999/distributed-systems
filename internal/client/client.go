@@ -5,6 +5,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	pb "github.com/Manthan0999/apaxos-project/pkg/banking"
+	"github.com/Manthan0999/apaxos-project/pkg/utils"
+	"google.golang.org/grpc"
 	"log"
 	"os"
 	"sort"
@@ -12,41 +15,58 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/Manthan0999/apaxos-project/pkg/banking"
-	"github.com/Manthan0999/apaxos-project/pkg/utils"
 	_ "github.com/mattn/go-sqlite3"
-	"google.golang.org/grpc"
 )
 
 // Client represents a banking client
 type Client struct {
-	ServerMap        map[string]string  // Map server IDs to addresses
-	serverShardMap   map[string]string  // Map server IDs to shard IDs
-	liveServers      map[string]bool    // Map of live server IDs
-	serverDBPaths    map[string]string  // Map server IDs to database file paths
-	dbConnections    map[string]*sql.DB // Map server IDs to database connections
-	dbConnectionsMux sync.Mutex         // Mutex for accessing dbConnections
+	ServerMap         map[string]string  // Map server IDs to addresses
+	serverShardMap    map[string]string  // Map server IDs to shard IDs
+	liveServers       map[string]bool    // Map of live server IDs
+	serverDBPaths     map[string]string  // Map server IDs to database file paths
+	dbConnections     map[string]*sql.DB // Map server IDs to database connections
+	dbConnectionsMux  sync.Mutex         // Mutex for accessing dbConnections
+	numClusters       int
+	serversPerCluster int
 }
 
 // NewClient initializes a new client instance
-func NewClient() *Client {
+func NewClient(numClusters int, serversPerCluster int) *Client {
 	client := &Client{
-		ServerMap: map[string]string{
-			"S1": "localhost:50051", "S2": "localhost:50052", "S3": "localhost:50053",
-			"S4": "localhost:50054", "S5": "localhost:50055", "S6": "localhost:50056",
-			"S7": "localhost:50057", "S8": "localhost:50058", "S9": "localhost:50059",
-		},
-		serverShardMap: map[string]string{
-			"S1": "D1", "S2": "D1", "S3": "D1",
-			"S4": "D2", "S5": "D2", "S6": "D2",
-			"S7": "D3", "S8": "D3", "S9": "D3",
-		},
-		liveServers:   make(map[string]bool),
-		serverDBPaths: make(map[string]string),
-		dbConnections: make(map[string]*sql.DB),
+		ServerMap:         make(map[string]string),
+		serverShardMap:    make(map[string]string),
+		liveServers:       make(map[string]bool),
+		serverDBPaths:     make(map[string]string),
+		dbConnections:     make(map[string]*sql.DB),
+		numClusters:       numClusters,
+		serversPerCluster: serversPerCluster,
 	}
-	client.initializeServerDBPaths()
+
+	basePort := 50050
+	serverCounter := 1
+
+	for clusterID := 1; clusterID <= numClusters; clusterID++ {
+		shardID := fmt.Sprintf("D%d", clusterID)
+		for i := 1; i <= serversPerCluster; i++ {
+			serverID := fmt.Sprintf("S%d", serverCounter)
+			serverAddress := fmt.Sprintf("localhost:%d", basePort+serverCounter)
+			client.ServerMap[serverID] = serverAddress
+			client.serverShardMap[serverID] = shardID
+			client.serverDBPaths[serverID] = fmt.Sprintf("server_%s.db", serverID)
+			serverCounter++
+		}
+	}
+
 	return client
+}
+
+// CloseDBConnections closes all database connections
+func (c *Client) CloseDBConnections() {
+	c.dbConnectionsMux.Lock()
+	defer c.dbConnectionsMux.Unlock()
+	for _, db := range c.dbConnections {
+		db.Close()
+	}
 }
 
 // initializeServerDBPaths initializes the database file paths for each server
@@ -59,13 +79,13 @@ func (c *Client) initializeServerDBPaths() {
 }
 
 // CloseDBConnections closes all database connections
-func (c *Client) CloseDBConnections() {
-	c.dbConnectionsMux.Lock()
-	defer c.dbConnectionsMux.Unlock()
-	for _, db := range c.dbConnections {
-		db.Close()
-	}
-}
+//func (c *Client) CloseDBConnections() {
+//	c.dbConnectionsMux.Lock()
+//	defer c.dbConnectionsMux.Unlock()
+//	for _, db := range c.dbConnections {
+//		db.Close()
+//	}
+//}
 
 // UpdateServersLiveServers updates the live servers across all servers in the cluster
 func (c *Client) UpdateServersLiveServers(contactServers []string) {
@@ -189,10 +209,10 @@ func (c *Client) ProcessSets(sets []*utils.TransactionSet) {
 }
 
 // GetBalances retrieves and returns the balances of a specific account from all servers in its shard
-func (c *Client) GetBalances(accountID int32) map[string]int32 {
+func (c *Client) GetBalances(txn *utils.Transaction, accountID int32) map[string]int32 {
 	// Map from serverID to balance
 	balances := make(map[string]int32)
-	shardID := getShard(accountID)
+	shardID := getShard(txn.Sender, c.numClusters)
 
 	for serverID, shard := range c.serverShardMap {
 		if shard != shardID {
@@ -251,8 +271,8 @@ func (c *Client) updateLiveServers(liveServers []string) {
 
 // processTransaction processes a single transaction (either intra-shard or cross-shard)
 func (c *Client) processTransaction(txn *utils.Transaction, Counter int, contactServers []string) {
-	senderShard := getShard(txn.Sender)
-	receiverShard := getShard(txn.Receiver)
+	senderShard := getShard(txn.Sender, c.numClusters)
+	receiverShard := getShard(txn.Receiver, c.numClusters)
 
 	contactServerSender := c.getContactServer(senderShard, contactServers)
 	contactServerReceiver := c.getContactServer(receiverShard, contactServers)
@@ -381,15 +401,15 @@ func (c *Client) sendCrossShardPrepare(serverID string, txn *utils.Transaction, 
 }
 
 // getShard determines the shard for an account ID
-func getShard(accountID int32) string {
-	if accountID >= 1 && accountID <= 1000 {
-		return "D1"
-	} else if accountID >= 1001 && accountID <= 2000 {
-		return "D2"
-	} else if accountID >= 2001 && accountID <= 3000 {
-		return "D3"
+func getShard(accountID int32, numClusters int) string {
+	totalAccounts := int32(3000)
+	accountsPerShard := totalAccounts / int32(numClusters)
+	shardNum := ((accountID - 1) / accountsPerShard) + 1
+	if shardNum > int32(numClusters) {
+		shardNum = int32(numClusters) // Handle edge cases
 	}
-	return ""
+	//log.Printf("getSGard D%d", shardNum)
+	return fmt.Sprintf("D%d", shardNum)
 }
 
 // GetServerAddress returns the address of the given server ID.
@@ -407,7 +427,7 @@ func (c *Client) GetBalancesforClient(accountID int32) map[string]int32 {
 	var wg sync.WaitGroup
 	var mu = sync.Mutex{}
 
-	shardID := getShard(accountID)
+	shardID := getShard(accountID, c.numClusters)
 	for serverID, addr := range c.ServerMap {
 		if c.serverShardMap[serverID] != shardID {
 			continue // Skip servers not in the shard

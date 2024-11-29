@@ -1,50 +1,40 @@
-// cmd/server/main.go
-
 package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"net"
-	"os"
-	"strings"
 
-	"github.com/Manthan0999/apaxos-project/internal/server"
+	serverpkg "github.com/Manthan0999/apaxos-project/internal/server"
 	pb "github.com/Manthan0999/apaxos-project/pkg/banking"
 	"google.golang.org/grpc"
 )
 
-var (
-	serverID          = flag.Int("serverID", 1, "Server ID")
-	numClusters       = flag.Int("clusters", 3, "Number of clusters (shards)")
-	serversPerCluster = flag.Int("serversPerCluster", 3, "Number of servers per cluster")
-)
-
 func main() {
+	// Parse command-line arguments
+	serverID := flag.String("serverID", "", "Server ID (e.g., S1)")
+	numClusters := flag.Int("clusters", 3, "Number of clusters (default 3)")
+	serversPerCluster := flag.Int("serversPerCluster", 3, "Number of servers per cluster (default 3)")
 	flag.Parse()
-	if len(os.Args) < 5 {
-		log.Fatalf("Usage: go run main.go [ServerID] [ShardID] [Port] [ClusterServers(comma-separated)]")
+
+	if *serverID == "" {
+		log.Fatalf("Server ID is required. Usage: -serverID=S1")
 	}
 
-	serverID := os.Args[1] // e.g., "S1"
-	shardID := os.Args[2]  // e.g., "D1"
-	port := os.Args[3]
-	clusterServers := strings.Split(os.Args[4], ",") // e.g., "S2,S3"
+	// Initialize the server with the specified or default number of clusters and servers per cluster
+	server := serverpkg.NewServer(*serverID, *numClusters, *serversPerCluster)
 
-	address := fmt.Sprintf("localhost:%s", port)
-
-	listener, err := net.Listen("tcp", address)
+	// Start the gRPC server
+	listener, err := net.Listen("tcp", server.ServerAddress())
 	if err != nil {
-		log.Fatalf("Failed to listen on %s: %v", address, err)
+		log.Fatalf("Failed to listen on %s: %v", server.ServerAddress(), err)
 	}
 
 	grpcServer := grpc.NewServer()
-	dbPath := fmt.Sprintf("server_%s.db", serverID)
-	srv := server.NewServer(shardID, serverID, dbPath, clusterServers)
-	pb.RegisterBankingServiceServer(grpcServer, srv)
+	pb.RegisterBankingServiceServer(grpcServer, server)
 
-	log.Printf("Server %s for shard %s listening on %s", serverID, shardID, address)
+	log.Printf("Server %s listening on %s", *serverID, server.ServerAddress())
+
 	if err := grpcServer.Serve(listener); err != nil {
 		log.Fatalf("Failed to serve gRPC server: %v", err)
 	}
