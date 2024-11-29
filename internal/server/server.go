@@ -321,7 +321,6 @@ func (s *Server) initializeAccounts() {
 	if err != nil {
 		log.Fatalf("Failed to commit transaction: %v", err)
 	}
-	log.Printf("Initialized accounts %d to %d with balance 10", startID, endID)
 }
 
 func (s *Server) GetBalance(ctx context.Context, req *pb.AccountRequest) (*pb.AccountResponse, error) {
@@ -361,7 +360,6 @@ func (s *Server) getShardRange() (startID, endID int) {
 func (s *Server) IntraShardTransaction(ctx context.Context, req *pb.TransactionRequest) (*pb.TransactionResponse, error) {
 	if !s.isContactServer {
 		msg := "Server is not the contact server for its shard"
-		log.Printf("[IntraShardTransaction] %s", msg)
 		return &pb.TransactionResponse{
 			Success: false,
 			Message: msg,
@@ -385,7 +383,6 @@ func (s *Server) IntraShardTransaction(ctx context.Context, req *pb.TransactionR
 	// Validate that the transaction is intra-shard
 	if getShard(txn.Sender) != s.shardID || getShard(txn.Receiver) != s.shardID {
 		msg := "Transaction is not intra-shard"
-		log.Printf("[IntraShardTransaction] %s", msg)
 		return &pb.TransactionResponse{
 			Success: false,
 			Message: msg,
@@ -405,14 +402,12 @@ func (s *Server) IntraShardTransaction(ctx context.Context, req *pb.TransactionR
 	if success {
 		defer s.releaseLocks(txn, -1)
 		msg := "Transaction committed successfully"
-		log.Printf("[IntraShardTransaction] %s", msg)
 		return &pb.TransactionResponse{
 			Success: true,
 			Message: msg,
 		}, nil
 	} else {
 		msg := "Transaction aborted"
-		log.Printf("[IntraShardTransaction] %s", msg)
 		return &pb.TransactionResponse{
 			Success: false,
 			Message: msg,
@@ -467,7 +462,6 @@ func (s *Server) InitiateConsensus(txn *pb.Transaction, phase string) (bool, err
 	// Attempt to acquire locks
 	waitForLocks := isIntraShard
 	if !s.acquireLocks(txn, waitForLocks) {
-		log.Printf("acquireLocks anish", txn)
 		// Abort the transaction on all involved shards
 		//s.abortPhase(ballot, txn)
 		return false, fmt.Errorf("Data items are locked")
@@ -585,7 +579,6 @@ func (s *Server) Prepare(ctx context.Context, req *pb.PrepareRequest) (*pb.Prepa
 
 	ballot := req.BallotNumber
 	log.Printf("[Prepare] Server %s received Prepare request with ballot %d", s.serverID, ballot)
-	log.Printf("Ballot: %d  CurrentBallot:%d", ballot, s.currentBallot)
 	if ballot > s.currentBallot {
 		s.currentBallot = ballot
 		missingTxns := s.getMissingTransactions(req.DatastoreVersion)
@@ -602,7 +595,6 @@ func (s *Server) Prepare(ctx context.Context, req *pb.PrepareRequest) (*pb.Prepa
 }
 
 func (s *Server) getMissingTransactions(version int32) []*pb.DatastoreEntry {
-	log.Printf("getMissingTransactions initiated")
 	if version < int32(len(s.committedTxns)) {
 		missingEntries := make([]*pb.DatastoreEntry, 0)
 		for _, entry := range s.committedTxns[version:] {
@@ -617,7 +609,6 @@ func (s *Server) getMissingTransactions(version int32) []*pb.DatastoreEntry {
 				},
 			}
 			missingEntries = append(missingEntries, pbEntry)
-			log.Printf("getMissingTransactions: %s", entry.TxnID)
 		}
 		return missingEntries
 	}
@@ -631,7 +622,6 @@ func (s *Server) acceptPhase(ballot int32, txn *pb.Transaction, isIntraShard boo
 	success := true
 
 	serverAddresses := s.getClusterServerAddresses()
-	log.Printf("anish acceptPhase: ")
 	for _, addr := range serverAddresses {
 		wg.Add(1)
 		go func(address string) {
@@ -678,44 +668,6 @@ func (s *Server) acceptPhase(ballot int32, txn *pb.Transaction, isIntraShard boo
 	}
 	return accepted, nil
 }
-
-//func (s *Server) Accept(ctx context.Context, req *pb.AcceptRequest) (*pb.AcceptResponse, error) {
-//	s.mu.Lock()
-//	defer s.mu.Unlock()
-//
-//	ballot := req.BallotNumber
-//	txn := req.Txn
-//	log.Printf("[Accept] Server %s received Accept request with ballot %d", s.serverID, ballot)
-//
-//	if ballot >= s.currentBallot {
-//		// Check for sufficient funds
-//		if !s.checkSufficientFunds(txn) {
-//			log.Printf("[Accept] Transaction aborted due to insufficient funds")
-//			return &pb.AcceptResponse{
-//				Accepted: false,
-//			}, nil
-//		}
-//		// Attempt to acquire locks
-//		if !s.locksAvailable(txn) {
-//			log.Printf("[Accept] Data items are locked")
-//			return &pb.AcceptResponse{
-//				Accepted: false,
-//			}, nil
-//		}
-//		s.acquireLocks(txn)
-//		// Defer lock release in case of abort
-//		s.currentBallot = ballot
-//		s.acceptedBallot = ballot
-//		s.acceptedValue = txn
-//		return &pb.AcceptResponse{
-//			Accepted: true,
-//		}, nil
-//	}
-//
-//	return &pb.AcceptResponse{
-//		Accepted: false,
-//	}, nil
-//}
 
 func (s *Server) Accept(ctx context.Context, req *pb.AcceptRequest) (*pb.AcceptResponse, error) {
 	ballot := req.BallotNumber
@@ -764,14 +716,6 @@ func (s *Server) Accept(ctx context.Context, req *pb.AcceptRequest) (*pb.AcceptR
 		}
 	}
 
-	// Attempt to acquire locks without holding s.mu
-	//if !s.acquireLocks(txn, waitForLocks) {
-	//	log.Printf("[Accept] Data items are locked")
-	//	return &pb.AcceptResponse{
-	//		Accepted: false,
-	//	}, nil
-	//}
-
 	// Set per-account acceptedBallot and acceptedValue under s.mu
 	s.mu.Lock()
 	for _, accountID := range accounts {
@@ -779,21 +723,6 @@ func (s *Server) Accept(ctx context.Context, req *pb.AcceptRequest) (*pb.AcceptR
 		s.acceptedValues[accountID] = txn
 	}
 	s.mu.Unlock()
-
-	//// Set a timer to release locks if commit not received
-	//go func(txn *pb.Transaction, ballot int32, accounts []int32) {
-	//	time.Sleep(10 * time.Second) // Adjust timeout as needed
-	//	s.mu.Lock()
-	//	defer s.mu.Unlock()
-	//	for _, accountID := range accounts {
-	//		if s.acceptedBallots[accountID] == ballot {
-	//			s.releaseLockForAccount(accountID, txn.ID)
-	//			delete(s.acceptedBallots, accountID)
-	//			delete(s.acceptedValues, accountID)
-	//			log.Printf("[Accept] Timeout reached, l %s", accountID, txn.ID)
-	//		}
-	//	}
-	//}(txn, ballot, accounts)
 
 	return &pb.AcceptResponse{
 		Accepted: true,
@@ -817,13 +746,6 @@ func (s *Server) commitPhase(ballot int32, txn *pb.Transaction) error {
 	serverAddresses := s.getClusterServerAddresses()
 
 	for _, addr := range serverAddresses {
-		log.Printf("addr %s ,s.serverAddress %s", addr, s.serverAddress)
-		//if addr == s.serverAddress {
-		//	err := s.commitFn(txn, ballot)
-		//	if err != nil {
-		//		success = false
-		//	}
-		//} else {
 		wg.Add(1)
 		go func(address string) {
 			defer wg.Done()
@@ -904,13 +826,6 @@ func (s *Server) commitFn(txn *pb.Transaction, ballot int32) error {
 
 	// Append to committed transactions
 	s.appendToDatastore(txn.ID, "", txn)
-	log.Printf(" commitFn anish 2: ")
-	// Release locks
-	//s.releaseLocks(txn, ballot)
-	//log.Printf(" commitFn anish 3: ")
-	// Clear accepted value and ballot
-	//s.acceptedBallot = 0
-	//s.acceptedValue = nil
 
 	// Clear acceptedBallots and acceptedValues for involved accounts
 	accounts := []int32{}
@@ -928,51 +843,8 @@ func (s *Server) commitFn(txn *pb.Transaction, ballot int32) error {
 	if err != nil {
 		return err
 	}
-	log.Printf(" commitFn anish 4: ")
 	return nil
 }
-
-//// Abort phase to release locks and reset state
-//func (s *Server) abortPhase(ballot int32, txn *pb.Transaction) {
-//	log.Printf("[Abort Phase] Aborting transaction with ballot %d", ballot)
-//	var wg sync.WaitGroup
-//	serverAddresses := s.getClusterServerAddresses()
-//
-//	for _, addr := range serverAddresses {
-//		wg.Add(1)
-//		go func(address string) {
-//			defer wg.Done()
-//			conn, err := grpc.Dial(address, grpc.WithInsecure())
-//			if err != nil {
-//				log.Printf("[Abort Phase] Failed to connect to %s: %v", address, err)
-//				return
-//			}
-//			defer conn.Close()
-//
-//			client := pb.NewBankingServiceClient(conn)
-//			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-//			defer cancel()
-//
-//			req := &pb.AbortRequest{
-//				BallotNumber: ballot,
-//				TxnId:        txn.ID, // Include txn.ID
-//			}
-//
-//			resp, err := client.Abort(ctx, req)
-//			if err != nil || !resp.Success {
-//				log.Printf("[Abort Phase] Abort RPC to %s failed: %v", address, err)
-//			} else {
-//				log.Printf("[Abort Phase] Abort acknowledged by %s", address)
-//			}
-//		}(addr)
-//	}
-//
-//	wg.Wait()
-//	// Release locks held by the leader
-//	s.releaseLocks(txn)
-//	// Remove from WAL if necessary
-//	s.removeTransactionFromWAL(txn.ID)
-//}
 
 func (s *Server) Abort(ctx context.Context, req *pb.AbortRequest) (*pb.AbortResponse, error) {
 	s.mu.Lock()
@@ -1038,9 +910,6 @@ func (s *Server) Abort(ctx context.Context, req *pb.AbortRequest) (*pb.AbortResp
 		}, nil
 	}
 
-	// Remove the transaction from WAL
-	//s.removeTransactionFromWAL(txn.ID)
-
 	// Release locks
 	s.releaseLocks(txn, ballot)
 
@@ -1049,47 +918,6 @@ func (s *Server) Abort(ctx context.Context, req *pb.AbortRequest) (*pb.AbortResp
 		Message: "Aborted and rolled back successfully",
 	}, nil
 }
-
-// Check if locks are available for the transaction
-//func (s *Server) locksAvailable(txn *pb.Transaction, waitForLocks bool) bool {
-//	accounts := []int32{}
-//	if getShard(txn.Sender) == s.shardID {
-//		accounts = append(accounts, txn.Sender)
-//	}
-//	if getShard(txn.Receiver) == s.shardID {
-//		accounts = append(accounts, txn.Receiver)
-//	}
-//
-//	for _, accountID := range accounts {
-//		s.locksMutex.Lock()
-//		lock, exists := s.locks[accountID]
-//		if !exists {
-//			lock = NewTryMutex()
-//			s.locks[accountID] = lock
-//		}
-//		s.locksMutex.Unlock()
-//
-//		if waitForLocks {
-//			// Wait for the lock
-//			lock.Lock()
-//			s.locksMutex.Lock()
-//			lock.holder = txn.ID
-//			s.locksMutex.Unlock()
-//			log.Printf("[Locks] Server %s acquired lock on account %d for txn %s", s.serverID, accountID, txn.ID)
-//		} else {
-//			// Try to acquire the lock
-//			if !lock.TryLock() {
-//				log.Printf("[Locks] Account %d is locked by transaction %s", accountID, lock.holder)
-//				return false
-//			}
-//			s.locksMutex.Lock()
-//			lock.holder = txn.ID
-//			s.locksMutex.Unlock()
-//			log.Printf("[Locks] Server %s acquired lock on account %d for txn %s", s.serverID, accountID, txn.ID)
-//		}
-//	}
-//	return true
-//}
 
 // Helper function to check if an account is locked
 func (s *Server) isAccountLocked(accountID int32) bool {
@@ -1141,7 +969,6 @@ func (s *Server) acquireLocks(txn *pb.Transaction, waitForLocks bool) bool {
 
 	acquiredLocks := make([]int32, 0)
 
-	log.Printf("accounts: %v", len(accounts))
 	for _, accountID := range accounts {
 		// Get or create the lock for accountID without holding locksMutex
 		s.locksMutex.Lock()
@@ -1151,7 +978,6 @@ func (s *Server) acquireLocks(txn *pb.Transaction, waitForLocks bool) bool {
 			s.locks[accountID] = lock
 		}
 		s.locksMutex.Unlock()
-		log.Printf("acquireLocks anish : %v", accountID)
 		var lockAcquired bool
 		if waitForLocks {
 			// Wait for the lock without holding any mutex
@@ -1161,7 +987,6 @@ func (s *Server) acquireLocks(txn *pb.Transaction, waitForLocks bool) bool {
 			// Try to acquire the lock
 			lockAcquired = lock.TryLock()
 		}
-		log.Printf("acquireLocks anish 2 : %v", accountID)
 		if lockAcquired {
 			// Set the lock holder
 			s.locksMutex.Lock()
@@ -1182,16 +1007,6 @@ func (s *Server) acquireLocks(txn *pb.Transaction, waitForLocks bool) bool {
 	return true
 }
 
-//func (s *Server) releaseLockForAccount(accountID int32, txnID string) {
-//	s.locksMutex.Lock()
-//	defer s.locksMutex.Unlock()
-//	if lock, exists := s.locks[accountID]; exists && lock.holder == txnID {
-//		lock.Unlock()
-//		delete(s.locks, accountID)
-//		log.Printf("[Locks] Server %s released lock on account %d", s.serverID, accountID)
-//	}
-//}
-
 func (s *Server) releaseLocks(txn *pb.Transaction, ballot int32) {
 	s.locksMutex.Lock()
 	defer s.locksMutex.Unlock()
@@ -1205,14 +1020,8 @@ func (s *Server) releaseLocks(txn *pb.Transaction, ballot int32) {
 	if getShard(txn.Receiver) == s.shardID {
 		accounts = append(accounts, txn.Receiver)
 	}
-	log.Printf(" releaseLocks anish 2: ")
+
 	for _, accountID := range accounts {
-		log.Printf(" releaseLocks anish 3: ", accountID)
-		//if holder, locked := s.locks[accountID]; locked && holder.holder == txn.ID {
-		//	holder.Unlock()
-		//	delete(s.locks, accountID)
-		//	log.Printf("[Locks] Server %s released lock on account %d", s.serverID, accountID)
-		//}
 		s.releaseLockForAccount(accountID, txn.ID)
 		if s.acceptedBallots[accountID] == ballot || ballot == 0 {
 
@@ -1221,7 +1030,6 @@ func (s *Server) releaseLocks(txn *pb.Transaction, ballot int32) {
 			log.Printf("[Accept] Timeout reached, for acc :%d txn: %s", accountID, txn.ID)
 		}
 	}
-	log.Printf(" releaseLocks anish 4: ")
 }
 func (s *Server) relaseLocks(txn *pb.Transaction, ballot int32, accounts []int32) {
 	s.mu.Lock()
@@ -1370,7 +1178,6 @@ func (s *Server) getTotalShardServers() int {
 
 func (s *Server) getMajority() int {
 	totalServerCount := s.getTotalShardServers()
-	log.Printf("totalServerCount: (%d)", totalServerCount)
 	return (totalServerCount / 2) + 1
 }
 

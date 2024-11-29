@@ -83,14 +83,6 @@ func (s *Server) transactionCommittedOrLogged(txnID string) bool {
 }
 
 func (s *Server) CrossShardCommit(ctx context.Context, req *pb.CrossShardCommitRequest) (*pb.CrossShardCommitResponse, error) {
-	//if !s.isContactServer {
-	//	msg := "Server is not the contact server for its shard"
-	//	log.Printf("[CrossShardCommit] %s", msg)
-	//	return &pb.CrossShardCommitResponse{
-	//		Success: false,
-	//		Message: msg,
-	//	}, nil
-	//}
 
 	s.txnMutex.Lock()
 	defer s.txnMutex.Unlock()
@@ -100,43 +92,20 @@ func (s *Server) CrossShardCommit(ctx context.Context, req *pb.CrossShardCommitR
 	txn, err := s.getTransactionFromWAL(string(txnID))
 	if err != nil {
 		msg := "Transaction not found in WAL"
-		log.Printf("[CrossShardCommit] %s: %v", msg, err)
 		return &pb.CrossShardCommitResponse{
 			Success: false,
 			Message: msg,
 		}, nil
 	}
 
-	//Initiate consensus for the commit phase
-	//success, err := s.InitiateConsensus(txn, "C")
-	//if err != nil {
-	//	log.Printf("[CrossShardCommit] Consensus failed: %v", err)
-	//	return &pb.CrossShardCommitResponse{
-	//		Success: false,
-	//		Message: err.Error(),
-	//	}, nil
-	//}
-
-	//if success {
-	// Remove the transaction from WAL
-	//s.removeTransactionFromWAL(txn.ID)
 	s.updateTransactionFromWAL(txn.ID, COMMIT)
 	msg := "Committed successfully"
-	log.Printf("[CrossShardCommit] %s", msg)
 	s.PrintWAL()
 	s.PrintDatastore()
 	return &pb.CrossShardCommitResponse{
 		Success: true,
 		Message: msg,
 	}, nil
-	//} else {
-	//	msg := "Commit aborted"
-	//	log.Printf("[CrossShardCommit] %s", msg)
-	//	return &pb.CrossShardCommitResponse{
-	//		Success: false,
-	//		Message: msg,
-	//	}, nil
-	//}
 
 }
 
@@ -147,14 +116,6 @@ const (
 )
 
 func (s *Server) CrossShardAbort(ctx context.Context, req *pb.CrossShardAbortRequest) (*pb.CrossShardAbortResponse, error) {
-	//if !s.isContactServer {
-	//	msg := "Server is not the contact server for its shard"
-	//	log.Printf("[CrossShardAbort] %s", msg)
-	//	return &pb.CrossShardAbortResponse{
-	//		Success: false,
-	//		Message: msg,
-	//	}, nil
-	//}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -224,9 +185,6 @@ func (s *Server) CrossShardAbort(ctx context.Context, req *pb.CrossShardAbortReq
 		}, nil
 	}
 	s.updateTransactionFromWAL(txn.ID, ABORT)
-	// Remove the transaction from WAL
-	//s.removeTransactionFromWAL(txn.ID)
-	//s.getMissingTransactions()
 
 	// Release locks
 	s.releaseLocks(txn, 0)

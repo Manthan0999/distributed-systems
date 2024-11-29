@@ -198,7 +198,6 @@ func main() {
 	}
 
 	fmt.Println("\n=== All Transaction Sets Processed ===")
-	// Optionally, display final performance metrics
 	perfMetrics.mu.Lock()
 	if perfMetrics.TotalTransactions > 0 {
 		throughput := float64(perfMetrics.TotalTransactions) / perfMetrics.TotalLatency.Seconds()

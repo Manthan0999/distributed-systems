@@ -377,10 +377,6 @@ func (c *Client) sendCrossShardPrepare(serverID string, txn *utils.Transaction, 
 		log.Printf("[Client] Cross-shard prepare successful on server %s: %v:", serverID, txn)
 		return true
 	}
-	//else {
-	//	log.Printf("[Client] Cross-shard prepare failed on server %s: %s", serverID, resp.Message)
-	//	return false
-	//}
 	return false
 }
 
@@ -395,8 +391,6 @@ func getShard(accountID int32) string {
 	}
 	return ""
 }
-
-// internal/client/client.go
 
 // GetServerAddress returns the address of the given server ID.
 func (c *Client) GetServerAddress(serverID string) string {

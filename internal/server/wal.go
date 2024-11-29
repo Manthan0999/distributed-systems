@@ -44,14 +44,6 @@ func (s *Server) getTransactionFromWAL(txnID string) (*pb.Transaction, error) {
 	return txn, nil
 }
 
-/*func (s *Server) removeTransactionFromWAL(txnID string) {
-	s.walMutex.Lock()
-	defer s.walMutex.Unlock()
-
-	delete(s.wal, txnID)
-	log.Printf("[WAL] Server %s removed txn %s from WAL", s.serverID, txnID)
-}*/
-
 func (s *Server) updateTransactionFromWAL(txnID string, status string) {
 	s.walMutex.Lock()
 	defer s.walMutex.Unlock()
